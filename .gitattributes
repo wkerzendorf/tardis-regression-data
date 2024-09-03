@@ -1,2 +1,5 @@
 *.h5 filter=lfs diff=lfs merge=lfs -text
 *.npy filter=lfs diff=lfs merge=lfs -text
+*.hdf5 filter=lfs diff=lfs merge=lfs -text
+*.hdf filter=lfs diff=lfs merge=lfs -text
+arepo_data/arepo_snapshot.json filter=lfs diff=lfs merge=lfs -text
