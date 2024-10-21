@@ -1,10 +1,9 @@
-import os
-import pathlib
 import shutil
 import subprocess
 import tempfile
 from filecmp import dircmp
 from pathlib import Path
+import os
 
 import numpy as np
 import pandas as pd
@@ -51,17 +50,17 @@ class FileManager:
         self.temp_dir = None
 
     def setup(self):
-        self.temp_dir = tempfile.mkdtemp(prefix=CONFIG['temp_dir_prefix'])
+        self.temp_dir = Path(tempfile.mkdtemp(prefix=CONFIG['temp_dir_prefix']))
         print(f'Created temporary directory at {self.temp_dir}')
 
     def teardown(self):
-        if self.temp_dir and os.path.exists(self.temp_dir):
+        if self.temp_dir and self.temp_dir.exists():
             shutil.rmtree(self.temp_dir)
             print(f'Removed temporary directory {self.temp_dir}')
         self.temp_dir = None
 
     def get_temp_path(self, filename):
-        return os.path.join(self.temp_dir, filename)
+        return self.temp_dir / filename
 
     def copy_file(self, source, destination):
         shutil.copy2(source, self.get_temp_path(destination))
@@ -113,8 +112,8 @@ class DiffAnalyzer:
         color_print(f"{symbol} {item}{dir_symbol}", color)
 
     def print_diff_files(self, dcmp):
-        dcmp.right = str(dcmp.right)
-        dcmp.left = str(dcmp.left)
+        dcmp.right = Path(dcmp.right)
+        dcmp.left = Path(dcmp.left)
         
         self._print_new_files(dcmp.right_only, dcmp.right, "ref1")
         self._print_new_files(dcmp.left_only, dcmp.left, "ref2")
@@ -125,24 +124,24 @@ class DiffAnalyzer:
 
     def _print_new_files(self, items, base_path, ref_name):
         for item in items:
-            if Path(base_path + "/" + item).is_file():
+            if (Path(base_path) / item).is_file():
                 print(f"New file detected inside {ref_name}: {item}")
-                print(f"Path: {base_path + '/' + item}")
+                print(f"Path: {Path(base_path) / item}")
                 print()
 
     def _print_modified_files(self, dcmp):
         for name in dcmp.diff_files:
             print(f"Modified file found {name}")
-            left = get_relative_path(dcmp.left, self.file_manager.temp_dir + "/ref1_tardis/")
-            right = get_relative_path(dcmp.right, self.file_manager.temp_dir + "/ref2_tardis/")
+            left = get_relative_path(dcmp.left, self.file_manager.temp_dir / "ref1_tardis")
+            right = get_relative_path(dcmp.right, self.file_manager.temp_dir / "ref2_tardis")
             if left == right:
                 print(f"Path: {left}")
             print()
 
 class HDFComparator:
     def summarise_changes_hdf(self, name, path1, path2):
-        ref1 = pd.HDFStore(os.path.join(path1, name))
-        ref2 = pd.HDFStore(os.path.join(path2, name))
+        ref1 = pd.HDFStore(Path(path1) / name)
+        ref2 = pd.HDFStore(Path(path2) / name)
         k1, k2 = set(ref1.keys()), set(ref2.keys())
         
         print(f"Total number of keys- in ref1: {len(k1)}, in ref2: {len(k2)}")
@@ -228,17 +227,18 @@ class ReferenceComparer:
         self.compare_hdf_files()
 
     def compare_hdf_files(self):
-        for root, dirs, files in os.walk(self.ref1_path):
+        for root, _, files in os.walk(self.ref1_path):
             for file in files:
-                if file.endswith('.h5') or file.endswith('.hdf5'):
-                    rel_path = os.path.relpath(root, self.ref1_path)
-                    ref2_file_path = os.path.join(self.ref2_path, rel_path, file)
-                    if os.path.exists(ref2_file_path):
-                        self.summarise_changes_hdf(file, root, os.path.dirname(ref2_file_path))
+                file_path = Path(file)
+                if file_path.suffix in ('.h5', '.hdf5'):
+                    rel_path = Path(root).relative_to(self.ref1_path)
+                    ref2_file_path = self.ref2_path / rel_path / file
+                    if ref2_file_path.exists():
+                        self.summarise_changes_hdf(file, root, ref2_file_path.parent)
 
     def summarise_changes_hdf(self, name, path1, path2):
         self.test_table_dict[name] = {
-            "path": get_relative_path(path1, self.file_manager.temp_dir + "/ref1_tardis/")
+            "path": get_relative_path(path1, self.file_manager.temp_dir / "ref1_tardis")
         }
         self.test_table_dict[name].update(
             self.hdf_comparator.summarise_changes_hdf(name, path1, path2)
