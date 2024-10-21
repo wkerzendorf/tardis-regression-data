@@ -74,24 +74,25 @@ class ReferenceComparer(object):
                     os.path.join(self.tmp_dir, prefix + self.compare_path))
 
     def display_diff_tree(self, dcmp, prefix=''):
-        def print_item(symbol, item, is_dir=False):
-            print(f"{prefix}{symbol} {item}{'/' if is_dir else ''}")
+        def print_item(symbol, item, color, is_dir=False):
+            dir_symbol = '/' if is_dir else ''
+            print(f"{prefix}{color}{symbol} {item}{dir_symbol}\033[0m")
 
         for item in sorted(dcmp.left_only):
             path = Path(dcmp.left) / item
-            print_item('-', item, path.is_dir())
+            print_item('−', item, '\033[91m', path.is_dir())  # Red for deleted
 
         for item in sorted(dcmp.right_only):
             path = Path(dcmp.right) / item
-            print_item('+', item, path.is_dir())
+            print_item('+', item, '\033[92m', path.is_dir())  # Green for added
 
         for item in sorted(dcmp.diff_files):
-            print_item('M', item)
+            print_item('✱', item, '\033[93m')  # Yellow for modified
 
         for item in sorted(dcmp.common_dirs):
-            print_item(' ', item, True)
-            subdir = getattr(dcmp, f'subdirs')[item]
-            self.display_diff_tree(subdir, prefix + '  ')
+            print_item('├', item, '\033[94m', True)  # Blue for directories
+            subdir = getattr(dcmp, 'subdirs')[item]
+            self.display_diff_tree(subdir, prefix + '│ ')
 
     def print_diff_files(self, dcmp):
         if isinstance(dcmp.right, pathlib.Path):
@@ -184,3 +185,4 @@ class ReferenceComparer(object):
             
         })
         
+
