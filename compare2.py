@@ -50,15 +50,15 @@ class FileManager:
     def __init__(self):
         self.temp_dir = None
 
-    def __enter__(self):
+    def setup(self):
         self.temp_dir = tempfile.mkdtemp(prefix=CONFIG['temp_dir_prefix'])
         print(f'Created temporary directory at {self.temp_dir}')
-        return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.temp_dir:
+    def teardown(self):
+        if self.temp_dir and os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
             print(f'Removed temporary directory {self.temp_dir}')
+        self.temp_dir = None
 
     def get_temp_path(self, filename):
         return os.path.join(self.temp_dir, filename)
@@ -141,8 +141,8 @@ class DiffAnalyzer:
 
 class HDFComparator:
     def summarise_changes_hdf(self, name, path1, path2):
-        ref1 = pd.HDFStore(path1 + "/" + name)
-        ref2 = pd.HDFStore(path2 + "/" + name)
+        ref1 = pd.HDFStore(os.path.join(path1, name))
+        ref2 = pd.HDFStore(os.path.join(path2, name))
         k1, k2 = set(ref1.keys()), set(ref2.keys())
         
         print(f"Total number of keys- in ref1: {len(k1)}, in ref2: {len(k2)}")
@@ -155,12 +155,12 @@ class HDFComparator:
 
         for item in k1 & k2:
             try:
-                if ref2[item].equals(ref1[item]):
+                if ref1[item].equals(ref2[item]):
                     identical_items.append(item)
                 else:
-                    self._compare_and_display_differences(ref1[item], ref2[item], item, name)
                     identical_name_different_data.append(item)
                     identical_name_different_data_dfs[item] = (ref1[item] - ref2[item]) / ref1[item]
+                    self._compare_and_display_differences(ref1[item], ref2[item], item, name)
             except Exception as e:
                 print(f"Error comparing item: {item}")
                 print(e)
@@ -168,6 +168,9 @@ class HDFComparator:
         print(f"Number of keys with same name but different data in ref1 and ref2: {len(identical_name_different_data)}")
         print(f"Number of totally same keys: {len(identical_items)}")
         print()
+
+        ref1.close()
+        ref2.close()
 
         return {
             "different_keys": different_keys,
@@ -202,25 +205,27 @@ class ReferenceComparer:
         self.ref1_hash = ref1_hash
         self.ref2_hash = ref2_hash
         self.test_table_dict = {}
-        self.file_manager = None
+        self.file_manager = FileManager()
         self.file_setup = None
         self.diff_analyzer = None
         self.hdf_comparator = None
 
     def setup(self):
-        self.file_manager = FileManager()
+        self.file_manager.setup()
         self.file_setup = FileSetup(self.file_manager, self.ref1_hash, self.ref2_hash)
         self.diff_analyzer = DiffAnalyzer(self.file_manager)
         self.hdf_comparator = HDFComparator()
+        self.file_setup.setup()
+        self.ref1_path = self.file_manager.get_temp_path(f"ref1_{CONFIG['compare_path']}")
+        self.ref2_path = self.file_manager.get_temp_path(f"ref2_{CONFIG['compare_path']}")
+
+    def teardown(self):
+        self.file_manager.teardown()
 
     def compare(self):
-        with self.file_manager:
-            self.file_setup.setup()
-            self.ref1_path = self.file_manager.get_temp_path(f"ref1_{CONFIG['compare_path']}")
-            self.ref2_path = self.file_manager.get_temp_path(f"ref2_{CONFIG['compare_path']}")
-            self.dcmp = dircmp(self.ref1_path, self.ref2_path)
-            self.diff_analyzer.print_diff_files(self.dcmp)
-            self.compare_hdf_files()
+        self.dcmp = dircmp(self.ref1_path, self.ref2_path)
+        self.diff_analyzer.print_diff_files(self.dcmp)
+        self.compare_hdf_files()
 
     def compare_hdf_files(self):
         for root, dirs, files in os.walk(self.ref1_path):
@@ -245,6 +250,9 @@ class ReferenceComparer:
             for key, value in results.items():
                 print(f"  {key}: {value}")
             print()
+
+    def get_temp_dir(self):
+        return self.file_manager.temp_dir
 
 if __name__ == '__main__':
     comparer = ReferenceComparer(ref1_hash="hash1", ref2_hash="hash2")
