@@ -94,17 +94,17 @@ class DiffAnalyzer:
     def display_diff_tree(self, dcmp, prefix=''):
         for item in sorted(dcmp.left_only):
             path = Path(dcmp.left) / item
-            self._print_item('−', item, 'red', path.is_dir())
+            self._print_item(f'{prefix}−', item, 'red', path.is_dir())
 
         for item in sorted(dcmp.right_only):
             path = Path(dcmp.right) / item
-            self._print_item('+', item, 'green', path.is_dir())
+            self._print_item(f'{prefix}+', item, 'green', path.is_dir())
 
         for item in sorted(dcmp.diff_files):
-            self._print_item('✱', item, 'yellow')
+            self._print_item(f'{prefix}✱', item, 'yellow')
 
         for item in sorted(dcmp.common_dirs):
-            self._print_item('├', item, 'blue', True)
+            self._print_item(f'{prefix}├', item, 'blue', True)
             subdir = getattr(dcmp, 'subdirs')[item]
             self.display_diff_tree(subdir, prefix + '│ ')
 
@@ -220,6 +220,16 @@ class ReferenceComparer:
             self.ref2_path = self.file_manager.get_temp_path(f"ref2_{CONFIG['compare_path']}")
             self.dcmp = dircmp(self.ref1_path, self.ref2_path)
             self.diff_analyzer.print_diff_files(self.dcmp)
+            self.compare_hdf_files()
+
+    def compare_hdf_files(self):
+        for root, dirs, files in os.walk(self.ref1_path):
+            for file in files:
+                if file.endswith('.h5') or file.endswith('.hdf5'):
+                    rel_path = os.path.relpath(root, self.ref1_path)
+                    ref2_file_path = os.path.join(self.ref2_path, rel_path, file)
+                    if os.path.exists(ref2_file_path):
+                        self.summarise_changes_hdf(file, root, os.path.dirname(ref2_file_path))
 
     def summarise_changes_hdf(self, name, path1, path2):
         self.test_table_dict[name] = {
@@ -229,7 +239,15 @@ class ReferenceComparer:
             self.hdf_comparator.summarise_changes_hdf(name, path1, path2)
         )
 
+    def display_hdf_comparison_results(self):
+        for name, results in self.test_table_dict.items():
+            print(f"Results for {name}:")
+            for key, value in results.items():
+                print(f"  {key}: {value}")
+            print()
+
 if __name__ == '__main__':
     comparer = ReferenceComparer(ref1_hash="hash1", ref2_hash="hash2")
     comparer.setup()
     comparer.compare()
+    comparer.display_hdf_comparison_results()
