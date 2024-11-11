@@ -9,29 +9,21 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.offline import init_notebook_mode
+import random
+import plotly.colors as pc
+import matplotlib.pyplot as plt
+import h5py
+from plotly.subplots import make_subplots
 
 init_notebook_mode()
 
 # Configuration
 CONFIG = {
-    'compare_path': 'tardis',
+    'compare_path': '.',  # Change this to '.' to use the root folder
     'temp_dir_prefix': 'ref_compare_',
 }
 
 # Utility functions
-def highlight_missing(val):
-    return 'background-color: #BCF5A9' if val == True else 'background-color: #F5A9A9'
-
-def highlight_relative_difference(val):
-    if val is None or val <= 1e-2:
-        return 'background-color: #BCF5A9'
-    elif val <= 1e-1:
-        return 'background-color: #F2F5A9'
-    elif val <= 1:
-        return 'background-color: #F5D0A9'
-    else:
-        return 'background-color: #F5A9A9'
-
 def color_print(text, color):
     colors = {
         'red': '\033[91m',
@@ -60,7 +52,7 @@ class FileManager:
         self.temp_dir = None
 
     def get_temp_path(self, filename):
-        return self.temp_dir / filename
+        return str(self.temp_dir / filename)
 
     def copy_file(self, source, destination):
         shutil.copy2(source, self.get_temp_path(destination))
@@ -73,18 +65,16 @@ class FileSetup:
 
     def setup(self):
         for ref_id, ref_hash in enumerate([self.ref1_hash, self.ref2_hash], 1):
+            ref_dir = self.file_manager.get_temp_path(f"ref{ref_id}")
+            os.makedirs(ref_dir, exist_ok=True)
             if ref_hash:
-                self._copy_data_from_hash(ref_hash, f'ref{ref_id}_')
+                self._copy_data_from_hash(ref_hash, ref_dir)
             else:
-                subprocess.run(f'cp {CONFIG["compare_path"]} {self.file_manager.get_temp_path(f"ref{ref_id}_{CONFIG["compare_path"]}")}', shell=True)
+                subprocess.run(f'cp -r {CONFIG["compare_path"]}/* {ref_dir}', shell=True)
 
-    def _copy_data_from_hash(self, ref_hash, prefix):
-        git_cmd = ['git', f'--work-tree={self.file_manager.temp_dir}', 'checkout', ref_hash, CONFIG['compare_path']]
-        subprocess.run(git_cmd)
-        shutil.move(
-            self.file_manager.get_temp_path(CONFIG['compare_path']),
-            self.file_manager.get_temp_path(prefix + CONFIG['compare_path'])
-        )
+    def _copy_data_from_hash(self, ref_hash, ref_dir):
+        git_cmd = ['git', 'archive', ref_hash, '|', 'tar', '-x', '-C', str(ref_dir)]
+        subprocess.run(' '.join(git_cmd), shell=True)
 
 class DiffAnalyzer:
     def __init__(self, file_manager):
@@ -122,21 +112,28 @@ class DiffAnalyzer:
         for sub_dcmp in dcmp.subdirs.values():
             self.print_diff_files(sub_dcmp)
 
-    def _print_new_files(self, items, base_path, ref_name):
-        for item in items:
-            if (Path(base_path) / item).is_file():
-                print(f"New file detected inside {ref_name}: {item}")
-                print(f"Path: {Path(base_path) / item}")
+    def _print_new_files(self, files, path, ref):
+        for item in files:
+            if Path(path, item).is_file():
+                print(f"New file detected inside {ref}: {item}")
+                print(f"Path: {Path(path, item)}")
                 print()
 
     def _print_modified_files(self, dcmp):
         for name in dcmp.diff_files:
             print(f"Modified file found {name}")
-            left = get_relative_path(dcmp.left, self.file_manager.temp_dir / "ref1_tardis")
-            right = get_relative_path(dcmp.right, self.file_manager.temp_dir / "ref2_tardis")
+            left = self._get_relative_path(dcmp.left)
+            right = self._get_relative_path(dcmp.right)
             if left == right:
                 print(f"Path: {left}")
             print()
+
+    def _get_relative_path(self, path):
+        try:
+            return str(Path(path).relative_to(self.file_manager.temp_dir))
+        except ValueError:
+            # If the path is not relative to temp_dir, return the full path
+            return str(path)
 
 class HDFComparator:
     def summarise_changes_hdf(self, name, path1, path2):
@@ -144,10 +141,7 @@ class HDFComparator:
         ref2 = pd.HDFStore(Path(path2) / name)
         k1, k2 = set(ref1.keys()), set(ref2.keys())
         
-        print(f"Total number of keys- in ref1: {len(k1)}, in ref2: {len(k2)}")
         different_keys = len(k1 ^ k2)
-        print(f"Number of keys with different names in ref1 and ref2: {different_keys}")
-
         identical_items = []
         identical_name_different_data = []
         identical_name_different_data_dfs = {}
@@ -164,18 +158,27 @@ class HDFComparator:
                 print(f"Error comparing item: {item}")
                 print(e)
 
-        print(f"Number of keys with same name but different data in ref1 and ref2: {len(identical_name_different_data)}")
-        print(f"Number of totally same keys: {len(identical_items)}")
-        print()
-
         ref1.close()
         ref2.close()
+
+        # Only return results if there are differences
+        if different_keys > 0 or len(identical_name_different_data) > 0:
+            print("\n" + "=" * 50)  # Add a separator line
+            print(f"Summary for {name}:")
+            print(f"Total number of keys- in ref1: {len(k1)}, in ref2: {len(k2)}")
+            print(f"Number of keys with different names in ref1 and ref2: {different_keys}")
+            print(f"Number of keys with same name but different data in ref1 and ref2: {len(identical_name_different_data)}")
+            print(f"Number of totally same keys: {len(identical_items)}")
+            print("=" * 50)  # Add another separator line after the summary
+            print()
 
         return {
             "different_keys": different_keys,
             "identical_keys": len(identical_items),
             "identical_keys_diff_data": len(identical_name_different_data),
-            "identical_name_different_data_dfs": identical_name_different_data_dfs
+            "identical_name_different_data_dfs": identical_name_different_data_dfs,
+            "ref1_keys": list(k1),
+            "ref2_keys": list(k2)
         }
 
     def _compare_and_display_differences(self, df1, df2, item, name):
@@ -198,6 +201,203 @@ class HDFComparator:
             diff = pd.DataFrame([diff.mean(), diff.max()], index=['mean', 'max'])
             display(diff.style.format('{:.2g}'.format).background_gradient(cmap='Reds'))
 
+class SpectrumSolverComparator:
+    def __init__(self, ref1_path, ref2_path):
+        self.ref1_path = ref1_path
+        self.ref2_path = ref2_path
+        self.spectrum_keys = [
+            'spectrum_integrated',
+            'spectrum_real_packets',
+            'spectrum_real_packets_reabsorbed',
+            'spectrum_virtual_packets'
+        ]
+        self.data = {}
+
+    def setup(self):
+        for ref_name, file_path in [('Ref1', self.ref1_path), ('Ref2', self.ref2_path)]:
+            self.data[ref_name] = {}
+            try:
+                with pd.HDFStore(file_path) as hdf:
+                    for key in self.spectrum_keys:
+                        full_key = f"simulation/spectrum_solver/{key}"
+                        self.data[ref_name][key] = {
+                            'wavelength': np.array(hdf[f'{full_key}/wavelength']),
+                            'luminosity': np.array(hdf[f'{full_key}/luminosity'])
+                        }
+            except FileNotFoundError:
+                print(f"Warning: File not found at {file_path}")
+            except KeyError as e:
+                print(f"Warning: Key {e} not found in {file_path}")
+
+    def plot_matplotlib(self):
+        fig = plt.figure(figsize=(20, 20))
+        gs = fig.add_gridspec(4, 2, height_ratios=[3, 1, 3, 1], hspace=0.1, wspace=0.3)
+
+        for idx, key in enumerate(self.spectrum_keys):
+            row = (idx // 2) * 2
+            col = idx % 2
+            
+            ax_luminosity = fig.add_subplot(gs[row, col])
+            ax_residuals = fig.add_subplot(gs[row+1, col], sharex=ax_luminosity)
+            
+            # Plot luminosity
+            for ref_name, linestyle in [('Ref1', '-'), ('Ref2', '--')]:
+                if key in self.data[ref_name]:
+                    wavelength = self.data[ref_name][key]['wavelength']
+                    luminosity = self.data[ref_name][key]['luminosity']
+                    ax_luminosity.plot(wavelength, luminosity, linestyle=linestyle, label=f'{ref_name} Luminosity')
+            
+            ax_luminosity.set_ylabel('Luminosity')
+            ax_luminosity.set_title(f'Luminosity for {key}')
+            ax_luminosity.legend()
+            ax_luminosity.grid(True)
+            
+            # Plot fractional residuals
+            if key in self.data['Ref1'] and key in self.data['Ref2']:
+                wavelength = self.data['Ref1'][key]['wavelength']
+                luminosity_ref1 = self.data['Ref1'][key]['luminosity']
+                luminosity_ref2 = self.data['Ref2'][key]['luminosity']
+                
+                # Calculate fractional residuals
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    fractional_residuals = np.where(luminosity_ref1 != 0, (luminosity_ref2 - luminosity_ref1) / luminosity_ref1, 0)
+                
+                ax_residuals.plot(wavelength, fractional_residuals, label='Fractional Residuals', color='purple')
+                ax_residuals.axhline(0, color='black', linestyle='--', linewidth=0.8)  # Add a horizontal line at y=0
+            
+            ax_residuals.set_xlabel('Wavelength')
+            ax_residuals.set_ylabel('Fractional Residuals')
+            ax_residuals.legend()
+            ax_residuals.grid(True)
+            
+            # Remove x-axis labels from upper plot
+            ax_luminosity.tick_params(axis='x', labelbottom=False)
+            
+            # Only show x-label for bottom plots
+            if row != 2:
+                ax_residuals.tick_params(axis='x', labelbottom=False)
+        
+        plt.suptitle('Comparison of Spectrum Solvers with Fractional Residuals', fontsize=16)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.95)
+        plt.show()
+
+    def plot_plotly(self):
+        # Create figure with 4x2 grid (2 pairs of plots in each column)
+        fig = make_subplots(
+            rows=4,
+            cols=2,
+            subplot_titles=[
+                'Luminosity for spectrum_integrated', 'Luminosity for spectrum_real_packets',
+                'Fractional Residuals', 'Fractional Residuals',
+                'Luminosity for spectrum_real_packets_reabsorbed', 'Luminosity for spectrum_virtual_packets',
+                'Fractional Residuals', 'Fractional Residuals'
+            ],
+            vertical_spacing=0.07, 
+            horizontal_spacing=0.08,  # Reduced from 0.15
+            row_heights=[0.3, 0.15] * 2  
+        )
+
+        # Plot each spectrum type and its residuals
+        for idx, key in enumerate(self.spectrum_keys):
+            # Calculate row and column positions
+            plot_col = idx % 2 + 1
+            plot_row = (idx // 2) * 2 + 1
+            
+            # Plot luminosity traces
+            for ref_name, line_style in [('Ref1', 'solid'), ('Ref2', 'dash')]:
+                if key in self.data[ref_name]:
+                    wavelength = self.data[ref_name][key]['wavelength']
+                    luminosity = self.data[ref_name][key]['luminosity']
+                    
+                    fig.add_trace(
+                        go.Scatter(
+                            x=wavelength,
+                            y=luminosity,
+                            mode='lines',
+                            name=f'{ref_name} - {key}',
+                            line=dict(dash=line_style),
+                            showlegend=(idx == 0)  # Only show legend for first set
+                        ),
+                        row=plot_row,
+                        col=plot_col
+                    )
+            
+            # Plot residuals
+            if key in self.data['Ref1'] and key in self.data['Ref2']:
+                wavelength = self.data['Ref1'][key]['wavelength']
+                luminosity_ref1 = self.data['Ref1'][key]['luminosity']
+                luminosity_ref2 = self.data['Ref2'][key]['luminosity']
+                
+                # Calculate fractional residuals
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    fractional_residuals = np.where(
+                        luminosity_ref1 != 0,
+                        (luminosity_ref2 - luminosity_ref1) / luminosity_ref1,
+                        0
+                    )
+                
+                # Add residuals trace
+                fig.add_trace(
+                    go.Scatter(
+                        x=wavelength,
+                        y=fractional_residuals,
+                        mode='lines',
+                        name=f'Residuals - {key}',
+                        line=dict(color='purple'),
+                        showlegend=False
+                    ),
+                    row=plot_row + 1,
+                    col=plot_col
+                )
+                
+                # Add horizontal line at y=0 for residuals
+                fig.add_hline(
+                    y=0,
+                    line=dict(color='black', dash='dash', width=0.8),
+                    row=plot_row + 1,
+                    col=plot_col
+                )
+
+            # Update axes labels
+            fig.update_xaxes(
+                title_text="",  # No x-label for upper plots
+                showticklabels=False,  # Hide x-ticks for upper plots
+                row=plot_row,
+                col=plot_col
+            )
+            fig.update_xaxes(
+                title_text="Wavelength",
+                row=plot_row + 1,
+                col=plot_col
+            )
+            
+            # Add y-axis labels
+            fig.update_yaxes(
+                title_text="Luminosity",
+                row=plot_row,
+                col=plot_col
+            )
+            fig.update_yaxes(
+                title_text="Fractional Residuals",
+                row=plot_row + 1,
+                col=plot_col
+            )
+
+        # Update layout
+        fig.update_layout(
+            title='Comparison of Spectrum Solvers with Fractional Residuals',
+            height=1000,
+            width=1200,
+            showlegend=True,
+        )
+
+        # Update subplot titles to be more visible
+        for i in fig['layout']['annotations']:
+            i['font'] = dict(size=12)
+
+        fig.show()
+
 class ReferenceComparer:
     def __init__(self, ref1_hash=None, ref2_hash=None):
         assert not ((ref1_hash is None) and (ref2_hash is None)), "One hash can not be None"
@@ -215,16 +415,23 @@ class ReferenceComparer:
         self.diff_analyzer = DiffAnalyzer(self.file_manager)
         self.hdf_comparator = HDFComparator()
         self.file_setup.setup()
-        self.ref1_path = self.file_manager.get_temp_path(f"ref1_{CONFIG['compare_path']}")
-        self.ref2_path = self.file_manager.get_temp_path(f"ref2_{CONFIG['compare_path']}")
+        self.ref1_path = self.file_manager.get_temp_path("ref1")
+        self.ref2_path = self.file_manager.get_temp_path("ref2")
+        self.dcmp = dircmp(self.ref1_path, self.ref2_path)
 
     def teardown(self):
         self.file_manager.teardown()
 
     def compare(self):
-        self.dcmp = dircmp(self.ref1_path, self.ref2_path)
         self.diff_analyzer.print_diff_files(self.dcmp)
         self.compare_hdf_files()
+        
+        # Update test_table_dict with added and deleted keys
+        for name, results in self.test_table_dict.items():
+            ref1_keys = set(results.get("ref1_keys", []))
+            ref2_keys = set(results.get("ref2_keys", []))
+            results["added_keys"] = list(ref2_keys - ref1_keys)
+            results["deleted_keys"] = list(ref1_keys - ref2_keys)
 
     def compare_hdf_files(self):
         for root, _, files in os.walk(self.ref1_path):
@@ -238,11 +445,14 @@ class ReferenceComparer:
 
     def summarise_changes_hdf(self, name, path1, path2):
         self.test_table_dict[name] = {
-            "path": get_relative_path(path1, self.file_manager.temp_dir / "ref1_tardis")
+            "path": get_relative_path(path1, self.file_manager.temp_dir / "ref1")
         }
-        self.test_table_dict[name].update(
-            self.hdf_comparator.summarise_changes_hdf(name, path1, path2)
-        )
+        results = self.hdf_comparator.summarise_changes_hdf(name, path1, path2)
+        self.test_table_dict[name].update(results)
+        
+        # Store keys for both references
+        self.test_table_dict[name]["ref1_keys"] = results.get("ref1_keys", [])
+        self.test_table_dict[name]["ref2_keys"] = results.get("ref2_keys", [])
 
     def display_hdf_comparison_results(self):
         for name, results in self.test_table_dict.items():
@@ -254,8 +464,133 @@ class ReferenceComparer:
     def get_temp_dir(self):
         return self.file_manager.temp_dir
 
+    def generate_graph(self, option):
+        print("Generating graph with updated hovertemplate")
+        if option not in ["different keys same name", "different keys"]:
+            raise ValueError("Invalid option. Choose 'different keys same name' or 'different keys'.")
+
+        data = []
+        for name, results in self.test_table_dict.items():
+            if option == "different keys same name":
+                value = results.get("identical_keys_diff_data", 0)
+                if value > 0:
+                    diff_data = results["identical_name_different_data_dfs"]
+                    keys = list(diff_data.keys())
+                    # Calculate max relative difference for each key
+                    rel_diffs = [diff_data[key].abs().max().max() for key in keys]
+                    data.append((name, value, keys, rel_diffs))
+            else:  # "different keys"
+                value = results.get("different_keys", 0)
+                if value > 0:
+                    added = list(results.get("added_keys", []))
+                    deleted = list(results.get("deleted_keys", []))
+                    data.append((name, value, added, deleted))
+
+        if not data:
+            return None
+
+        fig = go.Figure()
+
+        # Extract filenames from the full paths
+        filenames = [item[0].split('/')[-1] for item in data]
+
+        for item in data:
+            name = item[0]
+            if option == "different keys same name":
+                _, value, keys, rel_diffs = item
+                if rel_diffs:
+                    max_diff = max(rel_diffs)
+                    normalized_diffs = [diff / max_diff for diff in rel_diffs]
+                    colors = [pc.sample_colorscale('Blues', diff)[0] for diff in normalized_diffs]
+                else:
+                    colors = ['rgb(220, 220, 255)'] * len(keys)
+                    rel_diffs = [0] * len(keys)  # Set all differences to 0
+
+                fig.add_trace(go.Bar(
+                    y=[name] * len(keys),
+                    x=[1] * len(keys),
+                    orientation='h',
+                    name=name,
+                    text=keys,
+                    customdata=rel_diffs,
+                    marker_color=colors,
+                    hoverinfo='text',
+                    hovertext=[f"{name}<br>Key: {key}<br>Max relative difference: {diff:.2e}<br>(Versions differ by {diff:.1%})" 
+                               for key, diff in zip(keys, rel_diffs)]
+                ))
+            else:  # "different keys"
+                _, _, added, deleted = item
+                colors_added = [f'rgb(0, {random.randint(100, 255)}, 0)' for _ in added]
+                colors_deleted = [f'rgb({random.randint(100, 255)}, 0, 0)' for _ in deleted]
+                fig.add_trace(go.Bar(
+                    y=[name] * len(added),
+                    x=[1] * len(added),
+                    orientation='h',
+                    name=f"{name} (Added)",
+                    text=added,
+                    hovertemplate='%{y}<br>Added Key: %{text}<extra></extra>',
+                    marker_color=colors_added
+                ))
+                fig.add_trace(go.Bar(
+                    y=[name] * len(deleted),
+                    x=[1] * len(deleted),
+                    orientation='h',
+                    name=f"{name} (Deleted)",
+                    text=deleted,
+                    hovertemplate='%{y}<br>Deleted Key: %{text}<extra></extra>',
+                    marker_color=colors_deleted
+                ))
+
+        fig.update_layout(
+            title=f"{'Different Keys with Same Name' if option == 'different keys same name' else 'Different Keys'} Comparison",
+            barmode='stack',
+            height=max(300, len(data) * 40),  # Adjust height based on number of files
+            xaxis_title="Number of Keys",
+            yaxis=dict(
+                title='',
+                tickmode='array',
+                tickvals=list(range(len(filenames))),
+                ticktext=filenames,
+                showgrid=False
+            ),
+            showlegend=False,
+            bargap=0.1,
+            bargroupgap=0.05,
+            margin=dict(l=200)  # Increase left margin to accommodate longer filenames
+        )
+
+        # Remove the text on the right side of the bars
+        fig.update_traces(textposition='none')
+
+        # Add a color bar to show the scale
+        if any(item[3] for item in data if option == "different keys same name"):
+            fig.update_layout(
+                coloraxis_colorbar=dict(
+                    title="Relative Difference",
+                    tickvals=[0, 0.5, 1],
+                    ticktext=["Low", "Medium", "High"],
+                    lenmode="fraction",
+                    len=0.75,
+                )
+            )
+
+        return fig
+
+    def compare_testspectrumsolver_hdf(self, custom_ref1_path=None, custom_ref2_path=None):
+        ref1_path = custom_ref1_path or Path(self.ref1_path) / "tardis/spectrum/tests/test_spectrum_solver/test_spectrum_solver/TestSpectrumSolver.h5"
+        ref2_path = custom_ref2_path or Path(self.ref2_path) / "tardis/spectrum/tests/test_spectrum_solver/test_spectrum_solver/TestSpectrumSolver.h5"
+        
+        comparator = SpectrumSolverComparator(ref1_path, ref2_path)
+        comparator.setup()
+        
+        comparator.plot_matplotlib()
+        
+        comparator.plot_plotly()
+
 if __name__ == '__main__':
     comparer = ReferenceComparer(ref1_hash="hash1", ref2_hash="hash2")
     comparer.setup()
     comparer.compare()
-    comparer.display_hdf_comparison_results()
+    comparer.display_hdf_comparison_results()    
+    comparer.compare_testspectrumsolver_hdf()
+
