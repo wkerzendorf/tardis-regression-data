@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 CONFIG = {
-    'compare_path': '.',  # Change this to '.' to use the root folder
+    'compare_path': '.', 
     'temp_dir_prefix': 'ref_compare_',
 }
 
