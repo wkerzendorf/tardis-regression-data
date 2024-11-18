@@ -14,8 +14,11 @@ import plotly.colors as pc
 import matplotlib.pyplot as plt
 import h5py
 from plotly.subplots import make_subplots
+import logging
 
 init_notebook_mode()
+
+logger = logging.getLogger(__name__)
 
 # Configuration
 CONFIG = {
@@ -136,6 +139,9 @@ class DiffAnalyzer:
             return str(path)
 
 class HDFComparator:
+    def __init__(self, print_path=False):
+        self.print_path = print_path
+
     def summarise_changes_hdf(self, name, path1, path2):
         ref1 = pd.HDFStore(Path(path1) / name)
         ref2 = pd.HDFStore(Path(path2) / name)
@@ -153,7 +159,7 @@ class HDFComparator:
                 else:
                     identical_name_different_data.append(item)
                     identical_name_different_data_dfs[item] = (ref1[item] - ref2[item]) / ref1[item]
-                    self._compare_and_display_differences(ref1[item], ref2[item], item, name)
+                    self._compare_and_display_differences(ref1[item], ref2[item], item, name, path1, path2)
             except Exception as e:
                 print(f"Error comparing item: {item}")
                 print(e)
@@ -181,15 +187,33 @@ class HDFComparator:
             "ref2_keys": list(k2)
         }
 
-    def _compare_and_display_differences(self, df1, df2, item, name):
+    def _compare_and_display_differences(self, df1, df2, item, name, path1, path2):
         abs_diff = np.fabs(df1 - df2)
-        rel_diff = (abs_diff / np.fabs(df1))[df1 != 0]
-        
-        print(f"Displaying heatmap for key {item} in file {name}")
+        rel_diff = abs_diff / np.maximum(np.fabs(df1), np.fabs(df2))
+
+        # Check for differences larger than floating point uncertainty
+        FLOAT_UNCERTAINTY = 1e-14
+        max_rel_diff = np.nanmax(rel_diff)  # Using nanmax to handle NaN values
+
+        if max_rel_diff > FLOAT_UNCERTAINTY:
+            logger.warning(
+                f"Significant difference detected in {name}, key={item}\n"
+                f"Maximum relative difference: {max_rel_diff:.2e} "
+                f"(Versions differ by {max_rel_diff*100:.2e}%)"
+            )
+
+        print(f"Displaying heatmap for key {item} in file {name} \r")
         for diff_type, diff in zip(["abs", "rel"], [abs_diff, rel_diff]):
             print(f"Visualising {'Absolute' if diff_type == 'abs' else 'Relative'} Differences")
             self._display_difference(diff)
-        print("\n")
+
+        if self.print_path:
+            if path1 != path2:
+                print(f"Path1: {path1}")
+                print(f"Path2: {path2}")
+            else:
+                print(f"Path: {path1}")
+
 
     def _display_difference(self, diff):
         with pd.option_context('display.max_rows', 100, 'display.max_columns', 10):
@@ -200,6 +224,7 @@ class HDFComparator:
             
             diff = pd.DataFrame([diff.mean(), diff.max()], index=['mean', 'max'])
             display(diff.style.format('{:.2g}'.format).background_gradient(cmap='Reds'))
+
 
 class SpectrumSolverComparator:
     def __init__(self, ref1_path, ref2_path):
@@ -413,11 +438,13 @@ class SpectrumSolverComparator:
             annotation['y'] = annotation['y'] - 0.02
 
         fig.show()
+
 class ReferenceComparer:
-    def __init__(self, ref1_hash=None, ref2_hash=None):
+    def __init__(self, ref1_hash=None, ref2_hash=None, print_path=False):
         assert not ((ref1_hash is None) and (ref2_hash is None)), "One hash can not be None"
         self.ref1_hash = ref1_hash
         self.ref2_hash = ref2_hash
+        self.print_path = print_path
         self.test_table_dict = {}
         self.file_manager = FileManager()
         self.file_setup = None
@@ -428,7 +455,7 @@ class ReferenceComparer:
         self.file_manager.setup()
         self.file_setup = FileSetup(self.file_manager, self.ref1_hash, self.ref2_hash)
         self.diff_analyzer = DiffAnalyzer(self.file_manager)
-        self.hdf_comparator = HDFComparator()
+        self.hdf_comparator = HDFComparator(print_path=self.print_path)
         self.file_setup.setup()
         self.ref1_path = self.file_manager.get_temp_path("ref1")
         self.ref2_path = self.file_manager.get_temp_path("ref2")
@@ -437,8 +464,9 @@ class ReferenceComparer:
     def teardown(self):
         self.file_manager.teardown()
 
-    def compare(self):
-        self.diff_analyzer.print_diff_files(self.dcmp)
+    def compare(self, print_diff=False):
+        if print_diff:
+            self.diff_analyzer.print_diff_files(self.dcmp)
         self.compare_hdf_files()
         
         # Update test_table_dict with added and deleted keys
@@ -601,11 +629,4 @@ class ReferenceComparer:
         comparator.plot_matplotlib()
         
         comparator.plot_plotly()
-
-if __name__ == '__main__':
-    comparer = ReferenceComparer(ref1_hash="hash1", ref2_hash="hash2")
-    comparer.setup()
-    comparer.compare()
-    comparer.display_hdf_comparison_results()    
-    comparer.compare_testspectrumsolver_hdf()
 
