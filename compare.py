@@ -12,7 +12,6 @@ from plotly.offline import init_notebook_mode
 import random
 import plotly.colors as pc
 import matplotlib.pyplot as plt
-import h5py
 from plotly.subplots import make_subplots
 import logging
 
@@ -39,6 +38,20 @@ def color_print(text, color):
 
 def get_relative_path(path, base):
     return str(Path(path).relative_to(base))
+
+def get_last_two_commits():
+    try:
+        result = subprocess.run(['git', 'log', '--format=%H', '-n', '2'], 
+                              capture_output=True, 
+                              text=True, 
+                              check=True)
+        commits = result.stdout.strip().split('\n')
+        if len(commits) >= 2:
+            return commits[0], commits[1]
+        return None, None
+    except (subprocess.SubprocessError, subprocess.CalledProcessError):
+        print("Error: Unable to get git commits.")
+        return None, None
 
 class FileManager:
     def __init__(self):
