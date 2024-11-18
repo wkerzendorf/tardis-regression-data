@@ -1,0 +1,42 @@
+name: Run Comparison Notebook
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref1_hash:
+        description: 'First commit hash to compare'
+        required: false
+        default: ''
+      ref2_hash:
+        description: 'Second commit hash to compare'
+        required: false
+        default: ''
+
+defaults:
+  run:
+    shell: bash -l {0}
+
+jobs:
+  run-notebook:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup TARDIS environment
+      uses: ./.github/actions/setup_env
+
+    - name: Run notebook
+      env:
+        REF1_HASH: ${{ github.event.inputs.ref1_hash }}
+        REF2_HASH: ${{ github.event.inputs.ref2_hash }}
+      run: |
+        jupyter nbconvert --to notebook --execute compare_regression_data.ipynb --output executed_notebook.ipynb
+
+    - name: Upload notebook artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: comparison-results
+        path: executed_notebook.ipynb
