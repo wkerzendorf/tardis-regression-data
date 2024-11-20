@@ -11,6 +11,14 @@ on:
         description: 'Second commit hash to compare'
         required: false
         default: ''
+      custom_ref1_spectrum_path:
+        description: 'Custom path for first reference spectrum'
+        required: false
+        default: ''
+      custom_ref2_spectrum_path:
+        description: 'Custom path for second reference spectrum'
+        required: false
+        default: ''
 
 defaults:
   run:
@@ -32,11 +40,16 @@ jobs:
       env:
         REF1_HASH: ${{ github.event.inputs.ref1_hash }}
         REF2_HASH: ${{ github.event.inputs.ref2_hash }}
+        CUSTOM_REF1_SPECTRUM_PATH: ${{ github.event.inputs.custom_ref1_spectrum_path }}
+        CUSTOM_REF2_SPECTRUM_PATH: ${{ github.event.inputs.custom_ref2_spectrum_path }}
       run: |
         jupyter nbconvert --to notebook --execute compare_regression_data.ipynb --output executed_notebook.ipynb
+        jupyter nbconvert --to html executed_notebook.ipynb --output comparison_report.html
 
     - name: Upload notebook artifact
       uses: actions/upload-artifact@v4
       with:
         name: comparison-results
-        path: executed_notebook.ipynb
+        path: |
+          executed_notebook.ipynb
+          comparison_report.html

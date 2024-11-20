@@ -47,7 +47,7 @@ def get_last_two_commits():
                               check=True)
         commits = result.stdout.strip().split('\n')
         if len(commits) >= 2:
-            return commits[0], commits[1]
+            return commits[1], commits[0]
         return None, None
     except (subprocess.SubprocessError, subprocess.CalledProcessError):
         print("Error: Unable to get git commits.")
